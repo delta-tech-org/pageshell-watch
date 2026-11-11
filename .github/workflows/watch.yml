@@ -1,0 +1,51 @@
+name: watch
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  issues: write
+concurrency:
+  group: watch
+  cancel-in-progress: false
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DISCORD: ${{ secrets.DISCORD_DEADMAN_WEBHOOK }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: probe every target
+        id: probe
+        run: |
+          failed=""
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            code=000
+            for attempt in 1 2 3; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url" || true)
+              [ "$code" = "200" ] && break
+              sleep 10
+            done
+            echo "$url -> $code"
+            [ "$code" = "200" ] || failed="${failed}- ${url} (HTTP ${code})"$'\n'
+          done < targets.txt
+          { echo 'failed<<EOF'; printf '%s' "$failed"; echo 'EOF'; } >> "$GITHUB_OUTPUT"
+      - name: open, keep or close the outage
+        env:
+          FAILED: ${{ steps.probe.outputs.failed }}
+        run: |
+          say() { [ -z "$DISCORD" ] || curl -s -o /dev/null --max-time 15 -H 'Content-Type: application/json' -d "$(jq -n --arg c "$1" '{content: $c}')" "$DISCORD" || true; }
+          gh label create outage --color B60205 --description 'The platform does not answer from outside' 2>/dev/null || true
+          open=$(gh issue list --label outage --state open --json number --jq '.[0].number // empty')
+          now=$(date -u '+%Y-%m-%d %H:%M UTC')
+          if [ -n "$FAILED" ] && [ -z "$open" ]; then
+            gh issue create --title 'Platform down' --label outage --body "Seen from GitHub's runners at ${now}:"$'\n\n'"${FAILED}"
+            say "**PLATAFORMA CAÍDA** (vigía externo, ${now})"$'\n'"${FAILED}"
+          elif [ -z "$FAILED" ] && [ -n "$open" ]; then
+            gh issue close "$open" --comment "Every target answers 200 again at ${now}."
+            say "**Plataforma recuperada** (vigía externo, ${now}): todos los destinos responden 200."
+          fi

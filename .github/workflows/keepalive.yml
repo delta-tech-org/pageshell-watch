@@ -1,0 +1,21 @@
+name: keepalive
+on:
+  schedule:
+    - cron: '17 6 1 * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: commit the month
+        run: |
+          date -u +%Y-%m > heartbeat
+          git config user.name 'pageshell-watch'
+          git config user.email 'pageshell-watch@users.noreply.github.com'
+          git add heartbeat
+          git diff --cached --quiet || git commit -m "heartbeat $(cat heartbeat)"
+          git push
